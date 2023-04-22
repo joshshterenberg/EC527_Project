@@ -11,3 +11,6 @@ at https://github.com/joshshterenberg/cmssw/blob/from-CMSSW_12_6_0_pre5/RecoVert
 * [lib fmt](https://fmt.dev/) used by cmssw logger. E.g., `apt install libfmt-dev`
 * libtinyxml2 used by cmssw logger. E.g., `apt install libtinyxml2-dev`
 * TBB used by cmssw throughout. E.g., `apt install libtbb-dev`
+
+The cmssw_include directory contains select dependencies copied from the parent
+cmssw project.

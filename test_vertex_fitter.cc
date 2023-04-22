@@ -12,6 +12,7 @@
 #include <time.h>
 #include <math.h>
 #include <pthread.h>
+#include "CUDADataFormats/Track/interface/TrackForPVHeterogeneous.h"
 
 struct track_soa_t {
   long int *ids;
@@ -26,6 +27,9 @@ int main(int argc, char *argv[]) {
   int NUM_TRACKS_PER_VERTEX = 50;
   int SAMPLE_NUM = 12;  //related to Gaussian generation variance, CLT
 
+  TrackForPVHeterogeneous CPUtracks(cms::cuda::make_host_unique<TrackForPV::TrackForPVSoA>(cudaStreamDefault));
+  TrackForPVHeterogeneous GPUtracks(cms::cuda::make_device_unique<TrackForPV::TrackForPVSoA>(cudaStreamDefault));
+
   //create list of vertices based on known z values
   double TRUE_Z_VALS[NUM_VERTICES], z_vals[NUM_VERTICES];
   for (i = 0; i < NUM_VERTICES; i++) {
@@ -35,16 +39,20 @@ int main(int argc, char *argv[]) {
 
   //use vertex list to generate tracks list w associations
   // this can be roughly Gaussian distributed for now, will need to match MC later
-  track_soa_t tracks[NUM_VERTICES * NUM_TRACKS_PER_VERTEX];
+  track_soa_t tracks;
+  tracks.ids = new long int[NUM_VERTICES * NUM_TRACKS_PER_VERTEX];
+  tracks.zs = new double[NUM_VERTICES * NUM_TRACKS_PER_VERTEX];
+  tracks.vertex_ids = new long int[NUM_VERTICES * NUM_TRACKS_PER_VERTEX];
+  
   for (i = 0; i < NUM_VERTICES * NUM_TRACKS_PER_VERTEX; i++) {
-    tracks[i]->ids = i;
-    tracks[i]->vertex_idx = i / NUM_VERTICES;  //assigned in order
+    tracks.ids[i] = i;
+    tracks.vertex_ids[i] = i / NUM_VERTICES;  //assigned in order
     double track_pos = 0;
     for (j = 0; j < SAMPLE_NUM; j++) {
       srand(time(NULL));
-      track_pos += rand() / RAND_MAX;
+      track_pos += (double)rand() / RAND_MAX;
     }
-    tracks[i]->zs = (track_pos * 2 / (SAMPLE_NUM)) + TRUE_Z_VALS[i / NUM_VERTICES];
+    tracks.zs[i] = (track_pos * 2 / (SAMPLE_NUM)) + TRUE_Z_VALS[i / NUM_VERTICES];
   }
 
   //--------------------------------------------proc
@@ -62,4 +70,6 @@ int main(int argc, char *argv[]) {
   for (i = 0; i < NUM_VERTICES; i++) {
     errs[i] = TRUE_Z_VALS[i] - z_vals[i];
   }
+
+  return 0;
 }

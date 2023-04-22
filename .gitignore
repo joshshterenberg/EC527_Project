@@ -1,2 +1,5 @@
 /test_vertex_fitter
 *.o
+/thirdparty/*/
+*.rpm
+*.tar.gz

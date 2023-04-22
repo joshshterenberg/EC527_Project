@@ -14,3 +14,24 @@ at https://github.com/joshshterenberg/cmssw/blob/from-CMSSW_12_6_0_pre5/RecoVert
 
 The cmssw_include directory contains select dependencies copied from the parent
 cmssw project.
+
+### Building
+To build on SCC, first download and build all of the external dependencies by
+running `install_deps.sh`. This only needs to be done once.
+
+Next, set up your current shell's environment to be made aware of the downloaded
+dependencies and of the dependencies that are already available in SCC modules
+by running `source build_env.scc.sh`. This needs to be done once per shell
+session.
+
+Next, run `make -j4` to build this project.
+
+### Running
+To run on the SCC, request a node with GPUs. E.g., the following request
+asks for a 2-hour session with GPUs: `qrsh -l gpus=1 -P ec527 -l h_rt=2:00:00`
+
+Set up your shell session to be made aware of the project's dependencies and
+to load a compatible CUDA runtime by running `source run_env.scc.sh`. This needs
+to be done once per shell session in your `qrsh` runs.
+
+Run the application. E.g., `./test_vertex_fitter`

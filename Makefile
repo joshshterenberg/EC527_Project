@@ -1,12 +1,21 @@
 # Flags that can be overridden at make time
 CXXFLAGS=-Wall -g -O1
-EIGEN_INCLUDE=/usr/include/eigen3
+EIGEN_CFLAGS?=-I/usr/include/eigen3
+CUDART_CFLAGS?=
+CUDART_LDFLAGS?=
+LIBMD_CFLAGS?=
+LIBMD_LDFLAGS?=
+FMT_CFLAGS?=
+FMT_LDFLAGS?=
+TINYXML_CFLAGS?=
+TINYXML_LDFLAGS?=
 # Flags that are needed for correct compilation
-ALL_CXXFLAGS=-std=c++17 -I./cmssw_include -I$(EIGEN_INCLUDE) $(CXXFLAGS)
+ALL_CXXFLAGS=-std=c++17 -I./cmssw_include $(EIGEN_CFLAGS) $(CUDART_CFLAGS) $(FMT_CFLAGS) $(TINYXML_CFLAGS) $(LIBMD_CFLAGS) $(CXXFLAGS)
 # Enable the ALADDIN libmd5 interface, used by cmssw
 ALL_CPPFLAGS=-DLIBMD_MD5_ALADDIN $(CPPFLAGS)
 # Linked dependencies
-LDLIBS=-lm -lrt -lcudart -ltinyxml2 -ltbb -lmd -luuid
+LDLIBS=-lm -lrt -lcudart -ltinyxml2 -ltbb -lmd -luuid -pthread
+LDFLAGS=$(FMT_LDFLAGS) $(TINYXML_LDFLAGS) $(LIBMD_LDFLAGS) $(CUDART_LDFLAGS)
 LINK.o=$(LINK.cc)
 
 # C++ Executable outputs

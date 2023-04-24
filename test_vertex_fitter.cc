@@ -23,10 +23,11 @@ struct track_soa_t {
 int main(int argc, char *argv[]) {
   //--------------------------------------------preproc
   int i, j;
-  int NUM_VERTICES = 10; // Typically on the order of a few hundred. Other
-                         // real-world applications are on the order of hundreds of thousands. This is all
-                         // for one event. Expect many events per second.
-  int NUM_TRACKS_PER_VERTEX = 50;
+  static const int NUM_VERTICES = 10;  // Typically on the order of a few hundred. Other
+                                       // real-world applications are on the order of hundreds of thousands. This is all
+                                       // for one event. Expect many events per second.
+  static const int NUM_TRACKS_PER_VERTEX = 50;
+  static const int NUM_TRACKS = NUM_VERTICES * NUM_TRACKS_PER_VERTEX;
   int SAMPLE_NUM = 12;  //related to Gaussian generation variance, CLT
 
   //create list of vertices based on known z values
@@ -40,11 +41,12 @@ int main(int argc, char *argv[]) {
   //use vertex list to generate tracks list w associations
   // this can be roughly Gaussian distributed for now, will need to match MC later
   track_soa_t tracks;
-  tracks.ids = new long int[NUM_VERTICES * NUM_TRACKS_PER_VERTEX];
-  tracks.zs = new double[NUM_VERTICES * NUM_TRACKS_PER_VERTEX];
-  tracks.vertex_ids = new long int[NUM_VERTICES * NUM_TRACKS_PER_VERTEX];
+  tracks.ids = new long int[NUM_TRACKS];
+  tracks.zs = new double[NUM_TRACKS];
+  tracks.vertex_ids = new long int[NUM_TRACKS];
+  tracks.cluster_ids = new long int[NUM_TRACKS];
   
-  for (i = 0; i < NUM_VERTICES * NUM_TRACKS_PER_VERTEX; i++) {
+  for (i = 0; i < NUM_TRACKS; i++) {
     // distribute as gaussian around the true points. This generates the data we
     // are allowed to observe in the processing stage.
     tracks.ids[i] = i;
@@ -55,8 +57,8 @@ int main(int argc, char *argv[]) {
       track_pos += (double)rand() / RAND_MAX;
     }
     tracks.zs[i] = (track_pos * 2 / (SAMPLE_NUM)) + TRUE_Z_VALS[i / NUM_VERTICES];
-    // TODO: assign clusters. i.e., assign values to cluster_ids.
-    //       -- How can we make this separate from vertices?
+    // TODO: assign clusters. i.e., assign values to tracks.cluster_ids[i].
+    //       -- How can we make/simulate this separate from vertices?
   }
 
   // Filtering usually happens here in pre-proc. That gets rid of major
@@ -65,6 +67,37 @@ int main(int argc, char *argv[]) {
 
   //--------------------------------------------proc
   //1. For each cluster (vertex) get sample mean and sample stddev
+  // Naive 2-pass sample variance computation: Calculate mean then calculate ssqdiff
+  unsigned cluster_track_count[NUM_VERTICES]; // How many tracks are observed in a cluster
+  double cluster_track_mean[NUM_VERTICES]; // Mean of track-x-pos observations in a cluster
+  double cluster_track_std[NUM_VERTICES]; // Sample standard deviation of track-x-pos observations in a cluster
+  for (i = 0; i < NUM_VERTICES; ++i) {
+	  cluster_track_count[i] = 0;
+	  cluster_track_mean[i] = 0;
+	  cluster_track_std[i] = 0;
+  }
+
+  // Variance first pass: Calculate the mean.
+  for (i = 0; i < NUM_TRACKS; ++i) {
+    const long int cluster_id = tracks.cluster_ids[i];
+    cluster_track_mean[cluster_id] += tracks.zs[i];
+    cluster_track_count[cluster_id] += 1;
+  }
+  for (i = 0; i < NUM_VERTICES; ++i) {
+    cluster_track_mean[i] /= cluster_track_count[i];
+  }
+
+  // Variance second pass: get the sum of square differences, divided by n-1
+  for (i = 0; i < NUM_TRACKS; ++i) {
+    const long int cluster_id = tracks.cluster_ids[i];
+    const double diff = (tracks.zs[i] - cluster_track_mean[cluster_id]);
+    cluster_track_std[cluster_id] += diff * diff;
+  }
+  for (i = 0; i < NUM_VERTICES; ++i) {
+    // Calculate standard deviation from variance
+    cluster_track_std[i] = sqrt(cluster_track_std[i] / (cluster_track_count[i] - 1));
+  }
+
   //2. For each track, calculate distance from cluster's sample mean. If GT 3stddev, then
   //   it is an outlier. Have an "influence" scalar in the loop, 0 if outlier.
   //   Inliers get weight == gaussian(cluster mean, cluster stddev)(track's Z position).

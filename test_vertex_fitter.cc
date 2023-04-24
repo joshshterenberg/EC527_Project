@@ -12,7 +12,6 @@
 #include <time.h>
 #include <math.h>
 #include <pthread.h>
-#include "CUDADataFormats/Track/interface/TrackForPVHeterogeneous.h"
 
 struct track_soa_t {
   long int *ids;
@@ -30,12 +29,9 @@ int main(int argc, char *argv[]) {
   int NUM_TRACKS_PER_VERTEX = 50;
   int SAMPLE_NUM = 12;  //related to Gaussian generation variance, CLT
 
-  TrackForPVHeterogeneous CPUtracks(cms::cuda::make_host_unique<TrackForPV::TrackForPVSoA>(cudaStreamDefault));
-  TrackForPVHeterogeneous GPUtracks(cms::cuda::make_device_unique<TrackForPV::TrackForPVSoA>(cudaStreamDefault));
-
   //create list of vertices based on known z values
   double TRUE_Z_VALS[NUM_VERTICES], z_vals[NUM_VERTICES];
-// this is the ground truth -- actual vertices
+  // this is the ground truth -- actual vertices
   for (i = 0; i < NUM_VERTICES; i++) {
     srand(time(NULL));
     TRUE_Z_VALS[i] = -10 + (rand() * 20.0 / RAND_MAX); //detector is ~21 meters long

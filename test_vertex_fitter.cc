@@ -16,6 +16,7 @@
 struct track_soa_t {
   long int *ids;
   double *zs;
+  double *weight;
   long int *vertex_ids;
   long int *cluster_ids;
 };
@@ -43,6 +44,7 @@ int main(int argc, char *argv[]) {
   track_soa_t tracks;
   tracks.ids = new long int[NUM_TRACKS];
   tracks.zs = new double[NUM_TRACKS];
+  tracks.weight = new double[NUM_TRACKS];
   tracks.vertex_ids = new long int[NUM_TRACKS];
   tracks.cluster_ids = new long int[NUM_TRACKS];
   
@@ -66,8 +68,10 @@ int main(int argc, char *argv[]) {
   // this demo since we assume our generated data is "filtered".
 
   //--------------------------------------------proc
-  //1. For each cluster (vertex) get sample mean and sample stddev
+  //===========================================================================
+  // 1. For each cluster (vertex) get sample mean and sample stddev
   // Naive 2-pass sample variance computation: Calculate mean then calculate ssqdiff
+  //===========================================================================
   unsigned cluster_track_count[NUM_VERTICES]; // How many tracks are observed in a cluster
   double cluster_track_mean[NUM_VERTICES]; // Mean of track-x-pos observations in a cluster
   double cluster_track_std[NUM_VERTICES]; // Sample standard deviation of track-x-pos observations in a cluster
@@ -98,20 +102,56 @@ int main(int argc, char *argv[]) {
     cluster_track_std[i] = sqrt(cluster_track_std[i] / (cluster_track_count[i] - 1));
   }
 
-  //2. For each track, calculate distance from cluster's sample mean. If GT 3stddev, then
-  //   it is an outlier. Have an "influence" scalar in the loop, 0 if outlier.
-  //   Inliers get weight == gaussian(cluster mean, cluster stddev)(track's Z position).
-  //3. For each track, get influence-weighted mean of z positions. This gives
-  //   z-position of cluster. This is our final output, i.e., the vertex position. Assign to z_vals.
+  //===========================================================================
+  // 2. For each track, calculate distance from cluster's sample mean. If
+  // greater than 3*std, then it is an outlier. Have a weight scalar: 0 if
+  // outlier. Inliers get gaussian(cluster mean, cluster stddev)(track's Z pos)
+  //===========================================================================
+  // TODO: the stddev calculation contains distance from mean as an
+  // intermediate step. May reuse here. Profile to see if needed (may
+  // complicate other code transformations if we unnecessarily intertwine those
+  // steps).
+  double sum_of_weights = 0;
+  for (i = 0; i < NUM_TRACKS; ++i) {
+    const long int cluster_id = tracks.cluster_ids[i];
+    const double diff = (tracks.zs[i] - cluster_track_mean[cluster_id]);
+    if (diff > cluster_track_std[cluster_id] * 3) {
+      tracks.weight[i] = 0;
+    } else {
+      // TODO: tracks.weight[i] = gaussian(cluster_track_mean[cluster_id], cluster_track_std[cluster_id])(tracks.zs[i])
+      tracks.weight[i] = 1;
+    }
+    sum_of_weights += tracks.weight[i];
+  }
+
+  //===========================================================================
+  // 3. For each track, get influence-weighted mean of z positions. This gives
+  // z-position of cluster. This is our final output, i.e., the vertex
+  // position. Assign to z_vals.
+  //===========================================================================
+  for (i = 0; i < NUM_VERTICES; ++i) {
+    z_vals[i] = 0;
+  }
+  for (i = 0; i < NUM_TRACKS; ++i) {
+    const long int cluster_id = tracks.cluster_ids[i];
+    z_vals[cluster_id] += tracks.zs[i] * tracks.weight[i];
+  }
+  for (i = 0; i < NUM_VERTICES; ++i) {
+    z_vals[i] /= sum_of_weights;
+  }
 
   //--------------------------------------------postproc
   //get differences between calculated z values and real ones (efficiency). Use MSE from TRUE_Z_VALS to z_vals as our error calculation.
   //get time differences
   //analyze them and stuff
   double errs[NUM_VERTICES];
+  double mean_square_error = 0;
   for (i = 0; i < NUM_VERTICES; i++) {
-    errs[i] = TRUE_Z_VALS[i] - z_vals[i];
+    double err = TRUE_Z_VALS[i] - z_vals[i];
+    mean_square_error += err * err;
   }
+  mean_square_error /= NUM_VERTICES;
+  printf("Mean square error of z positions: %g\n", mean_square_error);
 
   // Above test data is perfectly clean, so we need to expect epsilon error.
   // TODO: Get testing data from Joshua's summer work: QCD 5, 10, 20, and 40. Use that to validate on non-clean data.

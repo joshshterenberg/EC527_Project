@@ -21,6 +21,14 @@ struct track_soa_t {
   long int *cluster_ids;
 };
 
+// Return the probability of drawing `x` on a Gaussian distribution defined by
+// `mean` and `std`.
+static inline double gaussian_pdf(double mean, double std, double x)
+{
+  const double xmstd = ((x - mean) / std);
+  return exp(-0.5 * xmstd * xmstd) / (std * sqrt(2 * M_PI));
+}
+
 int main(int argc, char *argv[]) {
   //--------------------------------------------preproc
   int i, j;
@@ -120,8 +128,7 @@ int main(int argc, char *argv[]) {
     if (diff > cluster_track_std[cluster_id] * 3) {
       tracks.weight[i] = 0;
     } else {
-      // TODO: tracks.weight[i] = gaussian(cluster_track_mean[cluster_id], cluster_track_std[cluster_id])(tracks.zs[i])
-      tracks.weight[i] = 1;
+      tracks.weight[i] = gaussian_pdf(cluster_track_mean[cluster_id], cluster_track_std[cluster_id], tracks.zs[i]);
     }
     sum_of_weights += tracks.weight[i];
   }

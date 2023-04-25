@@ -39,12 +39,12 @@ int main(int argc, char *argv[]) {
   static const int NUM_TRACKS_PER_VERTEX = 50;
   static const int NUM_TRACKS = NUM_VERTICES * NUM_TRACKS_PER_VERTEX;
   int SAMPLE_NUM = 12;  //related to Gaussian generation variance, CLT
+  srand(time(NULL));
 
   //create list of vertices based on known z values
   double TRUE_Z_VALS[NUM_VERTICES], z_vals[NUM_VERTICES];
   // this is the ground truth -- actual vertices
   for (i = 0; i < NUM_VERTICES; i++) {
-    srand(time(NULL));
     TRUE_Z_VALS[i] = -10 + (rand() * 20.0 / RAND_MAX); //detector is ~21 meters long
   }
 
@@ -64,7 +64,6 @@ int main(int argc, char *argv[]) {
     tracks.vertex_ids[i] = i / NUM_TRACKS_PER_VERTEX;  //assigned in order
     double track_pos = 0;
     for (j = 0; j < SAMPLE_NUM; j++) {
-      srand(time(NULL));
       track_pos += (double)rand() / RAND_MAX;
     }
     tracks.zs[i] = (track_pos * 2 / (SAMPLE_NUM)) + TRUE_Z_VALS[i / NUM_TRACKS_PER_VERTEX];

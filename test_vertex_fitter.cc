@@ -12,13 +12,14 @@
 #include <time.h>
 #include <math.h>
 #include <pthread.h>
+#include <memory>
 
 struct track_soa_t {
-  long int *ids;
-  double *zs;
-  double *weight;
-  long int *vertex_ids;
-  long int *cluster_ids;
+  std::unique_ptr<long int[]> ids;
+  std::unique_ptr<double[]> zs;
+  std::unique_ptr<double[]> weight;
+  std::unique_ptr<long int[]> vertex_ids;
+  std::unique_ptr<long int[]> cluster_ids;
 };
 
 // Return the probability of drawing `x` on a Gaussian distribution defined by

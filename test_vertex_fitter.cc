@@ -87,10 +87,12 @@ int main(int argc, char *argv[]) {
   unsigned cluster_track_count[NUM_VERTICES]; // How many tracks are observed in a cluster
   double cluster_track_mean[NUM_VERTICES]; // Mean of track-x-pos observations in a cluster
   double cluster_track_std[NUM_VERTICES]; // Sample standard deviation of track-x-pos observations in a cluster
+  double cluster_sum_of_weights[NUM_VERTICES];
   for (i = 0; i < NUM_VERTICES; ++i) {
 	  cluster_track_count[i] = 0;
 	  cluster_track_mean[i] = 0;
 	  cluster_track_std[i] = 0;
+	  cluster_sum_of_weights[i] = 0;
   }
 
   // Variance first pass: Calculate the mean.
@@ -123,7 +125,6 @@ int main(int argc, char *argv[]) {
   // intermediate step. May reuse here. Profile to see if needed (may
   // complicate other code transformations if we unnecessarily intertwine those
   // steps).
-  double sum_of_weights = 0;
   for (i = 0; i < NUM_TRACKS; ++i) {
     const long int cluster_id = tracks.cluster_ids[i];
     const double diff = (tracks.zs[i] - cluster_track_mean[cluster_id]);
@@ -132,7 +133,7 @@ int main(int argc, char *argv[]) {
     } else {
       tracks.weight[i] = gaussian_pdf(cluster_track_mean[cluster_id], cluster_track_std[cluster_id], tracks.zs[i]);
     }
-    sum_of_weights += tracks.weight[i];
+    cluster_sum_of_weights[cluster_id] += tracks.weight[i];
   }
 
   //===========================================================================
@@ -148,7 +149,7 @@ int main(int argc, char *argv[]) {
     z_vals[cluster_id] += tracks.zs[i] * tracks.weight[i];
   }
   for (i = 0; i < NUM_VERTICES; ++i) {
-    z_vals[i] /= sum_of_weights;
+    z_vals[i] /= cluster_sum_of_weights[i];
   }
 
   //--------------------------------------------postproc

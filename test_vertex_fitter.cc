@@ -63,9 +63,11 @@ int main(int argc, char *argv[]) {
     tracks.ids[i] = i;
     tracks.vertex_ids[i] = i / NUM_TRACKS_PER_VERTEX;  //assigned in order
     double track_pos = 0;
+    // Transform an Irwin-Hall distribution to approximate a normal distribution
     for (j = 0; j < SAMPLE_NUM; j++) {
       track_pos += (double)rand() / RAND_MAX;
     }
+    track_pos -= 6; // Necessary to make the distribution central around the mean
     tracks.zs[i] = (track_pos * 2 / (SAMPLE_NUM)) + TRUE_Z_VALS[i / NUM_TRACKS_PER_VERTEX];
     // TODO: assign clusters. i.e., don't just assign cluster==vertex. Need to
     //       simulate physical behavior that illustrates some of the challenges

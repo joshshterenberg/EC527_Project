@@ -2,11 +2,12 @@
 CXXFLAGS=-Wall -g -O1
 CUDART_CFLAGS?=
 CUDART_LDFLAGS?=
+CUDART_LDLIBS=-lcudart
 # Flags that are needed for correct compilation
 ALL_CXXFLAGS=-std=c++17 $(CUDART_CFLAGS) $(CXXFLAGS)
 ALL_CPPFLAGS=$(CPPFLAGS)
 # Linked dependencies
-LDLIBS=-lm -lrt -lcudart -pthread
+LDLIBS=-lm -lrt $(CUDART_LDLIBS) -pthread
 LDFLAGS=$(CUDART_LDFLAGS)
 LINK.o=$(LINK.cc)
 

@@ -42,25 +42,27 @@ int main(int argc, char *argv[]) {
   //use vertex list to generate tracks list w associations
   // this can be roughly Gaussian distributed for now, will need to match MC later
   track_soa_t tracks;
-  tracks.ids = new long int[NUM_TRACKS];
-  tracks.zs = new double[NUM_TRACKS];
-  tracks.weight = new double[NUM_TRACKS];
-  tracks.vertex_ids = new long int[NUM_TRACKS];
-  tracks.cluster_ids = new long int[NUM_TRACKS];
+  tracks.ids = std::make_unique<long int[]>(NUM_TRACKS);
+  tracks.zs = std::make_unique<double[]>(NUM_TRACKS);
+  tracks.weight = std::make_unique<double[]>(NUM_TRACKS);
+  tracks.vertex_ids = std::make_unique<long int[]>(NUM_TRACKS);
+  tracks.cluster_ids = std::make_unique<long int[]>(NUM_TRACKS);
   
   for (i = 0; i < NUM_TRACKS; i++) {
     // distribute as gaussian around the true points. This generates the data we
     // are allowed to observe in the processing stage.
     tracks.ids[i] = i;
-    tracks.vertex_ids[i] = i / NUM_VERTICES;  //assigned in order
+    tracks.vertex_ids[i] = i / NUM_TRACKS_PER_VERTEX;  //assigned in order
     double track_pos = 0;
     for (j = 0; j < SAMPLE_NUM; j++) {
       srand(time(NULL));
       track_pos += (double)rand() / RAND_MAX;
     }
-    tracks.zs[i] = (track_pos * 2 / (SAMPLE_NUM)) + TRUE_Z_VALS[i / NUM_VERTICES];
-    // TODO: assign clusters. i.e., assign values to tracks.cluster_ids[i].
-    //       -- How can we make/simulate this separate from vertices?
+    tracks.zs[i] = (track_pos * 2 / (SAMPLE_NUM)) + TRUE_Z_VALS[i / NUM_TRACKS_PER_VERTEX];
+    // TODO: assign clusters. i.e., don't just assign cluster==vertex. Need to
+    //       simulate physical behavior that illustrates some of the challenges
+    //       we'd see, or we need to load ground truths from actual measurements.
+    tracks.cluster_ids[i] = tracks.vertex_ids[i];
   }
 
   // Filtering usually happens here in pre-proc. That gets rid of major

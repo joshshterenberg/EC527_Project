@@ -147,6 +147,9 @@ static void vectorized_vertex_fit(size_t vertex_count, double* z_vals, size_t tr
   std::unique_ptr<unsigned[]> cluster_track_count(new unsigned[vertex_count]);
   // Mean of track-x-pos observations in a cluster
   std::unique_ptr<cluster_stats[]> clusters(new cluster_stats[vertex_count]);
+  // Track indices that are the start of a cluster
+  std::unique_ptr<size_t[]> cluster_track_offsets(new size_t[vertex_count + 1]);
+  ssize_t greatest_observed_cluster = -1;
   size_t i;
   static const double SQRT2PI = sqrt(2 * M_PI);
   //static const double INVSQRT2PI = 1/SQRT2PI;
@@ -162,7 +165,12 @@ static void vectorized_vertex_fit(size_t vertex_count, double* z_vals, size_t tr
     const long int cluster_id = tracks->cluster_ids[i];
     clusters[cluster_id].mean += tracks->zs[i];
     cluster_track_count[cluster_id] += 1;
+    if (cluster_id > greatest_observed_cluster) {
+      cluster_track_offsets[cluster_id] = i;
+      greatest_observed_cluster = cluster_id;
+    }
   }
+  cluster_track_offsets[vertex_count] = i; // Past-the-end sentinal
   for (i = 0; i < vertex_count; ++i) {
     clusters[i].mean /= cluster_track_count[i];
   }
@@ -192,19 +200,34 @@ static void vectorized_vertex_fit(size_t vertex_count, double* z_vals, size_t tr
   //    w = exp(-0.5 * xmstd * xmstd) / (cluster_track_std[cluster_id] * SQRT2PI);
   //    w = exp(-0.5 * xmstd * xmstd) * cluster_track_inv_std[cluster_id] * INVSQRT2PI;
   // After those transforms, we start seeing compiler-driven vectorization
-  for (i = 0; i < track_count; ++i) {
-    // TODO
-    // Currently achieving > DRAM Bandwidth, < L3
-    // Possible to operate in smaller chunks? Seems like we'd need to
-    // sort first (then work in segments of constant cluster ID), which is probably too costly.
-    const long int cluster_id = tracks->cluster_ids[i];
-    const double diff = tracks->zs[i] - clusters[cluster_id].mean;
-    const double xmstd = diff * clusters[cluster_id].inv_std;
-    // TODO: limited by exp function call
-    double w = exp(-0.5 * xmstd * xmstd - LOGSQRT2PI) * clusters[cluster_id].inv_std;
-    w = (diff > clusters[cluster_id].std * 3) ? 0 : w;
-    clusters[cluster_id].sum_of_weights += w;
-    z_vals[cluster_id] += tracks->zs[i] * w;
+#pragma omp parallel for private(i)
+  for (int cluster_id = 0; cluster_id < vertex_count; ++cluster_id) {
+    double cw = 0;
+    double cz = 0;
+
+    for (i = cluster_track_offsets[cluster_id]; i < cluster_track_offsets[cluster_id + 1]; ++i) {
+      // TODO
+      // Currently achieving > DRAM Bandwidth, < L3
+      // Possible to operate in smaller chunks? Seems like we'd need to
+      // sort first (then work in segments of constant cluster ID), which is probably too costly.
+      const double diff = tracks->zs[i] - clusters[cluster_id].mean;
+      const double xmstd = diff * clusters[cluster_id].inv_std;
+      // TODO: limited by exp function call
+      // From the SDM: Exp(x) = VSCALEF( 2R(x), x*(1/log(2.0))   <-- requires avx512
+      //               (use Intel SVML lib)
+      //               R(x) = x - log(2.0)*floor(x*(1/log(2.0));
+      //               R(x) is accurately computed by using a sufficiently long log(2.0) approximation (longer than the native floating-point format).
+      //double w = exp(-0.5 * xmstd * xmstd - LOGSQRT2PI) * clusters[cluster_id].inv_std;
+      double w = exp(-0.5 * xmstd * xmstd);  //Drop unnecessary factors (constant w.r.t. usage in the next for-loop)
+
+      // TODO: check for false-sharing (mem) or misalignment (vec).. seems larger problems are faster.
+      w = (diff > clusters[cluster_id].std * 3) ? 0 : w;
+      cw += w;
+      cz += tracks->zs[i] * w;
+    }
+
+    clusters[cluster_id].sum_of_weights = cw;
+    z_vals[cluster_id] = cz;
   }
 
   //===========================================================================
@@ -288,6 +311,14 @@ int main(int argc, char *argv[]) {
   // rid of very strong outliers (e.g., from instrumentation noise). We don't
   // implement that in this demo since we assume our generated data is
   // "filtered".
+  for (size_t i = 1; i < NUM_TRACKS; ++i) {
+    if (tracks.cluster_ids[i - 1] > tracks.cluster_ids[i]) {
+      fprintf(stderr, "Error: Tracks must be sorted by cluster ID. Track %zu is "
+		      "located after its expected position.\n", i);
+      exit(1);
+    }
+  }
+
   for (unsigned trial = 0; trial < TRIAL_COUNT; ++trial) {
     for (size_t i = 0; i < NUM_VERTICES; ++i) {
       z_vals[i] = 0;

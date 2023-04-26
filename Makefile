@@ -1,13 +1,13 @@
 # Flags that can be overridden at make time
-CXXFLAGS=-Wall -g -O1
+CXXFLAGS=
 CUDART_CFLAGS?=
 CUDART_LDFLAGS?=
 CUDART_LDLIBS=-lcudart
 # Flags that are needed for correct compilation
-ALL_CXXFLAGS=-std=c++17 $(CUDART_CFLAGS) $(CXXFLAGS)
+ALL_CXXFLAGS=-std=c++17 -Wall -g -O1 -march=native -xhost -fopenmp $(CUDART_CFLAGS) $(CXXFLAGS)
 ALL_CPPFLAGS=$(CPPFLAGS)
 # Linked dependencies
-LDLIBS=-lm -lrt $(CUDART_LDLIBS) -pthread
+LDLIBS=-lm -lrt $(CUDART_LDLIBS) -pthread -fopenmp
 LDFLAGS=$(CUDART_LDFLAGS)
 LINK.o=$(LINK.cc)
 

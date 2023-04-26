@@ -98,15 +98,107 @@ static void serial_vertex_fit(size_t vertex_count, double* z_vals, size_t track_
   // intermediate step. May reuse here. Profile to see if needed (may
   // complicate other code transformations if we unnecessarily intertwine those
   // steps).
+  // *************************************************************************
+  // **************** This is the main hot spot in this program **************
+  // *************************************************************************
   for (i = 0; i < track_count; ++i) {
     const long int cluster_id = tracks->cluster_ids[i];
     const double diff = (tracks->zs[i] - cluster_track_mean[cluster_id]);
     if (diff > cluster_track_std[cluster_id] * 3) {
       track_weights[i] = 0;
     } else {
-      // TODO: or instead, should I be doing cdf(some_max)-cdf(some_min)?
       track_weights[i] = gaussian_pdf(cluster_track_mean[cluster_id], cluster_track_std[cluster_id], tracks->zs[i]);
     }
+    cluster_sum_of_weights[cluster_id] += track_weights[i];
+  }
+
+  //===========================================================================
+  // 3. For each track, get influence-weighted mean of z positions. This gives
+  // z-position of cluster. This is our final output, i.e., the vertex
+  // position. Assign to z_vals.
+  //===========================================================================
+  for (i = 0; i < vertex_count; ++i) {
+    z_vals[i] = 0;
+  }
+  for (i = 0; i < track_count; ++i) {
+    const long int cluster_id = tracks->cluster_ids[i];
+    z_vals[cluster_id] += tracks->zs[i] * track_weights[i];
+  }
+  for (i = 0; i < vertex_count; ++i) {
+    z_vals[i] /= cluster_sum_of_weights[i];
+  }
+}
+
+static void vectorized_vertex_fit(size_t vertex_count, double* z_vals, size_t track_count, const track_soa_t* tracks) {
+  //===========================================================================
+  // 1. For each cluster (vertex) get sample mean and sample stddev
+  // Naive 2-pass sample variance computation: Calculate mean then calculate ssqdiff
+  //===========================================================================
+  // How many tracks are observed in a cluster
+  std::unique_ptr<unsigned[]> cluster_track_count(new unsigned[vertex_count]);
+  // Mean of track-x-pos observations in a cluster
+  std::unique_ptr<double[]> cluster_track_mean(new double[vertex_count]);
+  // Sample standard deviation of track-x-pos observations in a cluster
+  std::unique_ptr<double[]> cluster_track_std(new double[vertex_count]);
+  std::unique_ptr<double[]> cluster_track_inv_std(new double[vertex_count]);
+  std::unique_ptr<double[]> track_weights(new double[track_count]);
+  std::unique_ptr<double[]> cluster_sum_of_weights(new double[vertex_count]);
+  size_t i;
+  static const double SQRT2PI = sqrt(2 * M_PI);
+  static const double INVSQRT2PI = 1/SQRT2PI;
+  static const double LOGSQRT2PI = log(SQRT2PI);
+
+  for (i = 0; i < vertex_count; ++i) {
+    cluster_track_count[i] = 0;
+    cluster_track_mean[i] = 0;
+    cluster_track_std[i] = 0;
+    cluster_sum_of_weights[i] = 0;
+  }
+
+  // Variance first pass: Calculate the mean.
+  for (i = 0; i < track_count; ++i) {
+    const long int cluster_id = tracks->cluster_ids[i];
+    cluster_track_mean[cluster_id] += tracks->zs[i];
+    cluster_track_count[cluster_id] += 1;
+  }
+  for (i = 0; i < vertex_count; ++i) {
+    cluster_track_mean[i] /= cluster_track_count[i];
+  }
+
+  // Variance second pass: get the sum of square differences, divided by n-1
+  for (i = 0; i < track_count; ++i) {
+    const long int cluster_id = tracks->cluster_ids[i];
+    const double diff = (tracks->zs[i] - cluster_track_mean[cluster_id]);
+    cluster_track_std[cluster_id] += diff * diff;
+  }
+  for (i = 0; i < vertex_count; ++i) {
+    // Calculate standard deviation from variance
+    cluster_track_std[i] = sqrt(cluster_track_std[i] / (cluster_track_count[i] - 1));
+    cluster_track_inv_std[i] = 1/cluster_track_std[i];
+  }
+
+  //===========================================================================
+  // 2. For each track, calculate distance from cluster's sample mean. If
+  // greater than 3*std, then it is an outlier. Have a weight scalar: 0 if
+  // outlier. Inliers get gaussian(cluster mean, cluster stddev)(track's Z pos)
+  //===========================================================================
+  // TODO: the stddev calculation contains distance from mean as an
+  // intermediate step. May reuse here. Profile to see if needed (may
+  // complicate other code transformations if we unnecessarily intertwine those
+  // steps).
+  // *************************************************************************
+  // **************** This is the main hot spot in this program **************
+  // *************************************************************************
+  // Rearranged w calculation to get rid of division and to replace constant multiplications with log additions
+  //    w = exp(-0.5 * xmstd * xmstd) / (cluster_track_std[cluster_id] * SQRT2PI);
+  //    w = exp(-0.5 * xmstd * xmstd) * cluster_track_inv_std[cluster_id] * INVSQRT2PI;
+  // After those transforms, we start seeing compiler-driven vectorization
+  for (i = 0; i < track_count; ++i) {
+    const long int cluster_id = tracks->cluster_ids[i];
+    const double diff = tracks->zs[i] - cluster_track_mean[cluster_id];
+    const double xmstd = diff * cluster_track_inv_std[cluster_id];
+    const double w = exp(-0.5 * xmstd * xmstd - LOGSQRT2PI) * cluster_track_inv_std[cluster_id];
+    track_weights[i] = (diff > cluster_track_std[cluster_id] * 3) ? 0 : w;
     cluster_sum_of_weights[cluster_id] += track_weights[i];
   }
 
@@ -175,6 +267,9 @@ int main(int argc, char *argv[]) {
 
   struct timespec time_start, time_end;
   double serial_elapsed = 0;
+  double serial_error;
+  double vectorized_elapsed = 0;
+  double vectorized_error;
 
   srand(time(NULL));
 
@@ -203,13 +298,25 @@ int main(int argc, char *argv[]) {
     serial_vertex_fit(NUM_VERTICES, z_vals, NUM_TRACKS, &tracks);
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time_end);
     serial_elapsed += interval(time_start, time_end);
+    serial_error = mse(NUM_VERTICES, TRUE_Z_VALS, z_vals);
+
+    for (size_t i = 0; i < NUM_VERTICES; ++i) {
+      z_vals[i] = 0;
+    }
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time_start);
+    vectorized_vertex_fit(NUM_VERTICES, z_vals, NUM_TRACKS, &tracks);
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time_end);
+    vectorized_elapsed += interval(time_start, time_end);
+    vectorized_error = mse(NUM_VERTICES, TRUE_Z_VALS, z_vals);
   }
   serial_elapsed /= TRIAL_COUNT;
+  vectorized_elapsed /= TRIAL_COUNT;
 
   //get time differences
-  double mean_square_error = mse(NUM_VERTICES, TRUE_Z_VALS, z_vals);
-  printf("Serial implementation mean square error of z positions: %g\n", mean_square_error);
+  printf("Serial implementation mean square error of z positions: %g\n", serial_error);
   printf("Serial implementation time (s): %g\n", serial_elapsed);
+  printf("Vectorized implementation mean square error of z positions: %g\n", vectorized_error);
+  printf("Vectorized implementation time (s): %g\n", vectorized_elapsed);
 
   // Above test data is perfectly clean, so we need to expect epsilon error.
   // TODO: Get testing data from Joshua's summer work: QCD 5, 10, 20, and 40. Use that to validate on non-clean data.

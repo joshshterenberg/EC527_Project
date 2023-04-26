@@ -1,5 +1,5 @@
 # Flags that can be overridden at make time
-CXXFLAGS=-Wall -g -O1
+CXXFLAGS=-Wall -g -O1 -march=native
 CUDART_CFLAGS?=
 CUDART_LDFLAGS?=
 CUDART_LDLIBS=-lcudart

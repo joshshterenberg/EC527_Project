@@ -129,6 +129,15 @@ static void serial_vertex_fit(size_t vertex_count, double* z_vals, size_t track_
   }
 }
 
+// These stats are frequently accessed together, and not necessarily in order.
+// Suitable for AoS
+struct cluster_stats {
+  double mean;
+  double std;
+  double inv_std;
+  double sum_of_weights;
+};
+
 static void vectorized_vertex_fit(size_t vertex_count, double* z_vals, size_t track_count, const track_soa_t* tracks) {
   //===========================================================================
   // 1. For each cluster (vertex) get sample mean and sample stddev
@@ -137,44 +146,38 @@ static void vectorized_vertex_fit(size_t vertex_count, double* z_vals, size_t tr
   // How many tracks are observed in a cluster
   std::unique_ptr<unsigned[]> cluster_track_count(new unsigned[vertex_count]);
   // Mean of track-x-pos observations in a cluster
-  std::unique_ptr<double[]> cluster_track_mean(new double[vertex_count]);
-  // Sample standard deviation of track-x-pos observations in a cluster
-  std::unique_ptr<double[]> cluster_track_std(new double[vertex_count]);
-  std::unique_ptr<double[]> cluster_track_inv_std(new double[vertex_count]);
-  std::unique_ptr<double[]> track_weights(new double[track_count]);
-  std::unique_ptr<double[]> cluster_sum_of_weights(new double[vertex_count]);
+  std::unique_ptr<cluster_stats[]> clusters(new cluster_stats[vertex_count]);
   size_t i;
   static const double SQRT2PI = sqrt(2 * M_PI);
-  static const double INVSQRT2PI = 1/SQRT2PI;
+  //static const double INVSQRT2PI = 1/SQRT2PI;
   static const double LOGSQRT2PI = log(SQRT2PI);
 
   for (i = 0; i < vertex_count; ++i) {
     cluster_track_count[i] = 0;
-    cluster_track_mean[i] = 0;
-    cluster_track_std[i] = 0;
-    cluster_sum_of_weights[i] = 0;
+    clusters[i] = {0, 0, 0, 0};
   }
 
   // Variance first pass: Calculate the mean.
   for (i = 0; i < track_count; ++i) {
     const long int cluster_id = tracks->cluster_ids[i];
-    cluster_track_mean[cluster_id] += tracks->zs[i];
+    clusters[cluster_id].mean += tracks->zs[i];
     cluster_track_count[cluster_id] += 1;
   }
   for (i = 0; i < vertex_count; ++i) {
-    cluster_track_mean[i] /= cluster_track_count[i];
+    clusters[i].mean /= cluster_track_count[i];
   }
 
   // Variance second pass: get the sum of square differences, divided by n-1
   for (i = 0; i < track_count; ++i) {
     const long int cluster_id = tracks->cluster_ids[i];
-    const double diff = (tracks->zs[i] - cluster_track_mean[cluster_id]);
-    cluster_track_std[cluster_id] += diff * diff;
+    const double diff = (tracks->zs[i] - clusters[cluster_id].mean);
+    clusters[cluster_id].std += diff * diff;
   }
   for (i = 0; i < vertex_count; ++i) {
     // Calculate standard deviation from variance
-    cluster_track_std[i] = sqrt(cluster_track_std[i] / (cluster_track_count[i] - 1));
-    cluster_track_inv_std[i] = 1/cluster_track_std[i];
+    clusters[i].std = sqrt(clusters[i].std / (cluster_track_count[i] - 1));
+    clusters[i].inv_std = 1 / clusters[i].std;
+    z_vals[i] = 0;
   }
 
   //===========================================================================
@@ -182,10 +185,6 @@ static void vectorized_vertex_fit(size_t vertex_count, double* z_vals, size_t tr
   // greater than 3*std, then it is an outlier. Have a weight scalar: 0 if
   // outlier. Inliers get gaussian(cluster mean, cluster stddev)(track's Z pos)
   //===========================================================================
-  // TODO: the stddev calculation contains distance from mean as an
-  // intermediate step. May reuse here. Profile to see if needed (may
-  // complicate other code transformations if we unnecessarily intertwine those
-  // steps).
   // *************************************************************************
   // **************** This is the main hot spot in this program **************
   // *************************************************************************
@@ -194,12 +193,18 @@ static void vectorized_vertex_fit(size_t vertex_count, double* z_vals, size_t tr
   //    w = exp(-0.5 * xmstd * xmstd) * cluster_track_inv_std[cluster_id] * INVSQRT2PI;
   // After those transforms, we start seeing compiler-driven vectorization
   for (i = 0; i < track_count; ++i) {
+    // TODO
+    // Currently achieving > DRAM Bandwidth, < L3
+    // Possible to operate in smaller chunks? Seems like we'd need to
+    // sort first (then work in segments of constant cluster ID), which is probably too costly.
     const long int cluster_id = tracks->cluster_ids[i];
-    const double diff = tracks->zs[i] - cluster_track_mean[cluster_id];
-    const double xmstd = diff * cluster_track_inv_std[cluster_id];
-    const double w = exp(-0.5 * xmstd * xmstd - LOGSQRT2PI) * cluster_track_inv_std[cluster_id];
-    track_weights[i] = (diff > cluster_track_std[cluster_id] * 3) ? 0 : w;
-    cluster_sum_of_weights[cluster_id] += track_weights[i];
+    const double diff = tracks->zs[i] - clusters[cluster_id].mean;
+    const double xmstd = diff * clusters[cluster_id].inv_std;
+    // TODO: limited by exp function call
+    double w = exp(-0.5 * xmstd * xmstd - LOGSQRT2PI) * clusters[cluster_id].inv_std;
+    w = (diff > clusters[cluster_id].std * 3) ? 0 : w;
+    clusters[cluster_id].sum_of_weights += w;
+    z_vals[cluster_id] += tracks->zs[i] * w;
   }
 
   //===========================================================================
@@ -208,14 +213,7 @@ static void vectorized_vertex_fit(size_t vertex_count, double* z_vals, size_t tr
   // position. Assign to z_vals.
   //===========================================================================
   for (i = 0; i < vertex_count; ++i) {
-    z_vals[i] = 0;
-  }
-  for (i = 0; i < track_count; ++i) {
-    const long int cluster_id = tracks->cluster_ids[i];
-    z_vals[cluster_id] += tracks->zs[i] * track_weights[i];
-  }
-  for (i = 0; i < vertex_count; ++i) {
-    z_vals[i] /= cluster_sum_of_weights[i];
+    z_vals[i] /= clusters[i].sum_of_weights;
   }
 }
 

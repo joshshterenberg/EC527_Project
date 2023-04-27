@@ -26,7 +26,9 @@ struct track_soa_t {
 static inline double gaussian_pdf(double mean, double std, double x)
 {
   const double xmstd = ((x - mean) / std);
-  return exp(-0.5 * xmstd * xmstd) / (std * sqrt(2 * M_PI));
+  const double coeff = std * sqrt(2 * M_PI);
+  //return exp(-0.5 * xmstd * xmstd) / coeff;
+  return (1 - 0.5*pow(xmstd,2) + 0.25*pow(xmstd,4)) / coeff;
 }
 
 // Return the mean square error between two arrays of doubles.

@@ -11,7 +11,6 @@
 #include <stdlib.h>
 #include <time.h>
 #include <math.h>
-#include <pthread.h>
 #include <memory>
 
 struct track_soa_t {
@@ -129,64 +128,24 @@ static void serial_vertex_fit(size_t vertex_count, double* z_vals, size_t track_
   }
 }
 
-// These stats are frequently accessed together, and not necessarily in order.
-// Suitable for AoS
-struct cluster_stats {
-  double mean;
-  double std;
-  double inv_std;
-  double sum_of_weights;
-};
-
 static void vectorized_vertex_fit(size_t vertex_count, double* z_vals, size_t track_count, const track_soa_t* tracks) {
   //===========================================================================
   // 1. For each cluster (vertex) get sample mean and sample stddev
   // Naive 2-pass sample variance computation: Calculate mean then calculate ssqdiff
   //===========================================================================
-  // How many tracks are observed in a cluster
-  std::unique_ptr<unsigned[]> cluster_track_count(new unsigned[vertex_count]);
-  // Mean of track-x-pos observations in a cluster
-  std::unique_ptr<cluster_stats[]> clusters(new cluster_stats[vertex_count]);
   // Track indices that are the start of a cluster
   std::unique_ptr<size_t[]> cluster_track_offsets(new size_t[vertex_count + 1]);
   ssize_t greatest_observed_cluster = -1;
-  size_t i;
-  static const double SQRT2PI = sqrt(2 * M_PI);
-  //static const double INVSQRT2PI = 1/SQRT2PI;
-  static const double LOGSQRT2PI = log(SQRT2PI);
+  const double* zs = tracks->zs.get();
 
-  for (i = 0; i < vertex_count; ++i) {
-    cluster_track_count[i] = 0;
-    clusters[i] = {0, 0, 0, 0};
-  }
-
-  // Variance first pass: Calculate the mean.
-  for (i = 0; i < track_count; ++i) {
+  for (size_t i = 0; i < track_count; ++i) {
     const long int cluster_id = tracks->cluster_ids[i];
-    clusters[cluster_id].mean += tracks->zs[i];
-    cluster_track_count[cluster_id] += 1;
     if (cluster_id > greatest_observed_cluster) {
       cluster_track_offsets[cluster_id] = i;
       greatest_observed_cluster = cluster_id;
     }
   }
-  cluster_track_offsets[vertex_count] = i; // Past-the-end sentinal
-  for (i = 0; i < vertex_count; ++i) {
-    clusters[i].mean /= cluster_track_count[i];
-  }
-
-  // Variance second pass: get the sum of square differences, divided by n-1
-  for (i = 0; i < track_count; ++i) {
-    const long int cluster_id = tracks->cluster_ids[i];
-    const double diff = (tracks->zs[i] - clusters[cluster_id].mean);
-    clusters[cluster_id].std += diff * diff;
-  }
-  for (i = 0; i < vertex_count; ++i) {
-    // Calculate standard deviation from variance
-    clusters[i].std = sqrt(clusters[i].std / (cluster_track_count[i] - 1));
-    clusters[i].inv_std = 1 / clusters[i].std;
-    z_vals[i] = 0;
-  }
+  cluster_track_offsets[vertex_count] = track_count; // Past-the-end sentinel
 
   //===========================================================================
   // 2. For each track, calculate distance from cluster's sample mean. If
@@ -200,43 +159,68 @@ static void vectorized_vertex_fit(size_t vertex_count, double* z_vals, size_t tr
   //    w = exp(-0.5 * xmstd * xmstd) / (cluster_track_std[cluster_id] * SQRT2PI);
   //    w = exp(-0.5 * xmstd * xmstd) * cluster_track_inv_std[cluster_id] * INVSQRT2PI;
   // After those transforms, we start seeing compiler-driven vectorization
-#pragma omp parallel for private(i)
-  for (int cluster_id = 0; cluster_id < vertex_count; ++cluster_id) {
-    double cw = 0;
-    double cz = 0;
+#pragma omp parallel for
+  for (size_t cluster_id = 0; cluster_id < vertex_count; ++cluster_id) {
+    size_t first_track = cluster_track_offsets[cluster_id];
+    size_t past_last_track = cluster_track_offsets[cluster_id + 1];
 
-    for (i = cluster_track_offsets[cluster_id]; i < cluster_track_offsets[cluster_id + 1]; ++i) {
-      // TODO
-      // Currently achieving > DRAM Bandwidth, < L3
-      // Possible to operate in smaller chunks? Seems like we'd need to
-      // sort first (then work in segments of constant cluster ID), which is probably too costly.
-      const double diff = tracks->zs[i] - clusters[cluster_id].mean;
-      const double xmstd = diff * clusters[cluster_id].inv_std;
-      // TODO: limited by exp function call
-      // From the SDM: Exp(x) = VSCALEF( 2R(x), x*(1/log(2.0))   <-- requires avx512
-      //               (use Intel SVML lib)
-      //               R(x) = x - log(2.0)*floor(x*(1/log(2.0));
-      //               R(x) is accurately computed by using a sufficiently long log(2.0) approximation (longer than the native floating-point format).
-      //double w = exp(-0.5 * xmstd * xmstd - LOGSQRT2PI) * clusters[cluster_id].inv_std;
-      double w = exp(-0.5 * xmstd * xmstd);  //Drop unnecessary factors (constant w.r.t. usage in the next for-loop)
+    // Welford's numerically stable single-pass variance
+    // TODO: This is slower than the 2-pass at face value. May be worthwhile if
+    // we can do alongside other work, or if we can vectorize it. 
+    // https://dbs.ifi.uni-heidelberg.de/files/Team/eschubert/publications/SSDBM18-covariance-slides.pdf describes a vectorization method.
+    // size_t count = 0;
+    // double mean = 0;
+    // double sqdiff = 0; //running square distance from mean
+    // for (size_t track = first_track; track < past_last_track; ++track) {
+    //   count += 1;
+    //   double delta = zs[track] - mean;
+    //   mean += delta / count;
+    //   double delta2 = zs[track] - mean;
+    //   sqdiff += delta * delta2;
+    // }
+    // double cluster_mean = mean;
+    // double cluster_std = sqrt(sqdiff / (count - 1));
 
-      // TODO: check for false-sharing (mem) or misalignment (vec).. seems larger problems are faster.
-      w = (diff > clusters[cluster_id].std * 3) ? 0 : w;
-      cw += w;
-      cz += tracks->zs[i] * w;
+    // Variance first pass: Calculate the mean.
+    size_t cluster_track_count = 0;
+    double cluster_mean = 0;
+    for (size_t track = first_track; track < past_last_track; ++track) {
+      cluster_mean += zs[track];
+      cluster_track_count += 1;
+    }
+    cluster_mean /= cluster_track_count;
+
+    // Variance second pass: get the sum of square differences, divided by n-1
+    double cluster_std = 0;
+    for (size_t track = first_track; track < past_last_track; ++track) {
+      const double diff = (zs[track] - cluster_mean);
+      cluster_std += diff * diff;
+    }
+    // Calculate standard deviation from variance
+    cluster_std = sqrt(cluster_std / (cluster_track_count - 1));
+
+    double cluster_inv_std = 1 / cluster_std;
+    double cluster_total_weight = 0;
+    double cluster_z_estimate = 0;
+
+    for (size_t track = first_track; track < past_last_track; ++track) {
+      const double z = zs[track];
+      const double diff = z - cluster_mean;
+      const double xmstd = diff * cluster_inv_std;
+      // Was double w = exp(-0.5 * xmstd * xmstd - LOGSQRT2PI) * cluster_inv_std;
+      // Dropped unnecessary factors (constant w.r.t. usage in the next for-loop)
+      double w = exp(-0.5 * xmstd * xmstd);
+      w = (diff > cluster_std * 3) ? 0 : w;
+      cluster_total_weight += w;
+      cluster_z_estimate += z * w;
     }
 
-    clusters[cluster_id].sum_of_weights = cw;
-    z_vals[cluster_id] = cz;
-  }
-
-  //===========================================================================
-  // 3. For each track, get influence-weighted mean of z positions. This gives
-  // z-position of cluster. This is our final output, i.e., the vertex
-  // position. Assign to z_vals.
-  //===========================================================================
-  for (i = 0; i < vertex_count; ++i) {
-    z_vals[i] /= clusters[i].sum_of_weights;
+    z_vals[cluster_id] = cluster_z_estimate / cluster_total_weight;
+    //===========================================================================
+    // 3. For each track, get influence-weighted mean of z positions. This gives
+    // z-position of cluster. This is our final output, i.e., the vertex
+    // position. Assign to z_vals.
+    //===========================================================================
   }
 }
 
@@ -311,10 +295,10 @@ int main(int argc, char *argv[]) {
   // rid of very strong outliers (e.g., from instrumentation noise). We don't
   // implement that in this demo since we assume our generated data is
   // "filtered".
-  for (size_t i = 1; i < NUM_TRACKS; ++i) {
-    if (tracks.cluster_ids[i - 1] > tracks.cluster_ids[i]) {
+  for (size_t i = 0; i < NUM_TRACKS-1; ++i) {
+    if (tracks.cluster_ids[i] > tracks.cluster_ids[i + 1]) {
       fprintf(stderr, "Error: Tracks must be sorted by cluster ID. Track %zu is "
-		      "located after its expected position.\n", i);
+		      "located after its expected position.\n", i+1);
       exit(1);
     }
   }

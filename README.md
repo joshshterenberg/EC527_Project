@@ -12,6 +12,9 @@ downloaded dependencies and of the dependencies that are already available in
 SCC modules by running `source build_env.scc.sh`. This needs to be done once
 per shell session.
 
+To build on eng-grid, run `source build_env.eng-grid.sh`. This only needs to be
+done once per shell session, before running make.
+
 Next, run `make -j4` to build this project.
 
 ### Running

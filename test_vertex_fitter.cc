@@ -294,10 +294,10 @@ int main(int argc, char *argv[]) {
   }
 
   track_soa_t tracks;
-  tracks.ids = std::make_unique<long int[]>(NUM_TRACKS);
-  tracks.zs = std::make_unique<double[]>(NUM_TRACKS);
-  tracks.vertex_ids = std::make_unique<long int[]>(NUM_TRACKS);
-  tracks.cluster_ids = std::make_unique<long int[]>(NUM_TRACKS);
+  tracks.ids = std::unique_ptr<long int[]>(new long int[NUM_TRACKS]);
+  tracks.zs = std::unique_ptr<double[]>(new double[NUM_TRACKS]);
+  tracks.vertex_ids = std::unique_ptr<long int[]>(new long int[NUM_TRACKS]);
+  tracks.cluster_ids = std::unique_ptr<long int[]>(new long int[NUM_TRACKS]);
   generate_tracks_from_vertices(NUM_TRACKS_PER_VERTEX, NUM_TRACKS, &tracks, NUM_VERTICES, TRUE_Z_VALS);
 
   // Filtering track outliers usually also happens in pre-processing. That gets

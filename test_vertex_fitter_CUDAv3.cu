@@ -46,9 +46,9 @@ __device__ double atomicAdd(double* address, double val)
 }
 
 #define PRINT_TIME		1
-#define NUM_VERTICES		10
-#define NUM_TRACKS_PER_VERTEX	50
-#define NUM_TRACKS		500 //NUM_VERTICES * NUM_TRACKS_PER_VERTEX
+#define NUM_VERTICES		500
+#define NUM_TRACKS_PER_VERTEX	2000
+#define NUM_TRACKS		(NUM_VERTICES * NUM_TRACKS_PER_VERTEX)
 #define SAMPLE_NUM		12
 
 struct track_soa_t {
@@ -64,10 +64,15 @@ __global__ void proc(double* tracks_zs, double* tracks_weight, long int* tracks_
 
   const int i_track = threadIdx.x; //track
   const int i_vertex = blockDim.x; //vertex
-  __shared__ unsigned cluster_track_count = 0;
-  __shared__ double cluster_track_mean = 0;
-  __shared__ double cluster_track_std = 0;
-  __shared__ double cluster_sum_of_weights = 0;
+  __shared__ unsigned cluster_track_count;
+  __shared__ double cluster_track_mean;
+  __shared__ double cluster_track_std;
+  __shared__ double cluster_sum_of_weights;
+
+  cluster_track_count = 0;
+  cluster_track_mean = 0;
+  cluster_track_std = 0;
+  cluster_sum_of_weights = 0;
 
   __syncthreads(); //always sync write/read clusters
 

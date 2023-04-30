@@ -46,10 +46,11 @@ __device__ double atomicAdd(double* address, double val)
 }
 
 #define PRINT_TIME		1
-#define NUM_VERTICES		10
-#define NUM_TRACKS_PER_VERTEX	50
-#define NUM_TRACKS		500 //NUM_VERTICES * NUM_TRACKS_PER_VERTEX
+#define NUM_VERTICES		500
+#define NUM_TRACKS_PER_VERTEX	2000
+#define NUM_TRACKS		(NUM_VERTICES * NUM_TRACKS_PER_VERTEX)
 #define SAMPLE_NUM		12
+#define THREADS_PER_BLOCK	16
 
 struct track_soa_t {
   long int* ids;
@@ -155,8 +156,8 @@ int main(int argc, char *argv[]) {
   CUDA_SAFE_CALL(cudaMemcpy(tracks_cluster_ids_gpu, tracks.cluster_ids, int_size, cudaMemcpyHostToDevice));
   CUDA_SAFE_CALL(cudaMemcpy(z_vals_gpu, z_vals, vertex_size, cudaMemcpyHostToDevice));
 
-  dim3 dimGrid(1);
-  dim3 dimBlock(NUM_VERTICES);
+  dim3 dimGrid(NUM_VERTICES / THREADS_PER_BLOCK);
+  dim3 dimBlock(THREADS_PER_BLOCK);
 
 #if PRINT_TIME
   // Create the cuda events

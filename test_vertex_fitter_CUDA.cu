@@ -46,9 +46,9 @@ __device__ double atomicAdd(double* address, double val)
 }
 
 #define PRINT_TIME		1
-#define NUM_VERTICES		10
-#define NUM_TRACKS_PER_VERTEX	50
-#define NUM_TRACKS		500 //NUM_VERTICES * NUM_TRACKS_PER_VERTEX
+#define NUM_VERTICES		500
+#define NUM_TRACKS_PER_VERTEX	2000
+#define NUM_TRACKS		(NUM_VERTICES * NUM_TRACKS_PER_VERTEX)
 #define SAMPLE_NUM		12
 
 struct track_soa_t {

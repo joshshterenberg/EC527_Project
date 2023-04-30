@@ -60,49 +60,44 @@ struct track_soa_t {
 };
 
 __global__ void proc(double* tracks_zs, double* tracks_weight, long int* tracks_cluster_ids, double* z_vals) {
-  // current parallel strat: every track gets its own thread
-  //   (should be ok because 1024 max threads/block)
-  // assuming the grid is 1d
-  // THIS IS A BAD IDEA IN PRACTICE BECAUSE NUM_TRACKS_PER_VERTEX ISN'T CONSTANT
+  //parallel strat: 1 cluster per thread, track loops in openmp?
 
-  //assuming that first NUM_TRACKS_PER_VERTEX tracks are assoc with vertex 0, etc.
-  int i_track;
   const int i_vertex = blockIdx.x * blockDim.x + threadIdx.x; //track
-  unsigned cluster_track_count=0;
-  double cluster_track_mean=0, cluster_track_std=0, cluster_sum_of_weights=0;
+  double cluster_sum_of_weights=0;
 
-  //sync write/read is NEVER NEEDED
-  for (i_track = 0; i_track < NUM_TRACKS; i_track++) {
-    long int cluster_id = tracks_cluster_ids[i_track];
-    if (cluster_id == i_vertex) { //track belongs to this vertex
-      cluster_track_mean += tracks_zs[i_track];
-      cluster_track_count += 1;
-    }
+  size_t count = 0;
+  double mean = 0;
+  double sqdiff = 0;
+
+  int i, j = i_vertex * NUM_TRACKS_PER_VERTEX; //like before, assumed order is known
+  for (i = 0; i < NUM_TRACKS_PER_VERTEX; i++) {
+    int i_track = i+j;
+  //for (i_track = 0; i_track < NUM_TRACKS; i_track++) {
+  //  long int cluster_id = tracks_cluster_ids[i_track];
+  //  if (cluster_id == i_vertex) { //track belongs to this vertex
+      count += 1;
+      double delta = tracks_zs[i_track] - mean;
+      mean += delta / count;
+      double delta2 = tracks_zs[i_track] - mean;
+      sqdiff += delta * delta2;
+  //  }
   }
+  double cluster_track_mean = mean;
+  double cluster_track_std = sqrt(sqdiff / (count - 1));
 
-  cluster_track_mean /= cluster_track_count;
-
-  for (i_track = 0; i_track < NUM_TRACKS; i_track++) {
-    long int cluster_id = tracks_cluster_ids[i_track];
-    if (cluster_id == i_vertex) { //track belongs to this vertex
+  for (i = 0; i < NUM_TRACKS_PER_VERTEX; i++) {
+    int i_track = i+j;
+  //for (i_track = 0; i_track < NUM_TRACKS; i_track++) {
+  //  long int cluster_id = tracks_cluster_ids[i_track];
+  //  if (cluster_id == i_vertex) {
       double diff = -1.0 * abs(tracks_zs[i_track] - cluster_track_mean);
-      cluster_track_std += diff*diff;
-    }
-  }
-  
-  cluster_track_std = sqrt(cluster_track_std / (cluster_track_count - 1));
-
-  for (i_track = 0; i_track < NUM_TRACKS; i_track++) {
-    long int cluster_id = tracks_cluster_ids[i_track];
-    if (cluster_id == i_vertex) { //track belongs to this vertex
-       double diff = -1.0 * abs(tracks_zs[i_track] - cluster_track_mean);
       if (diff <= cluster_track_std * 3) {
         double xmstd = (tracks_zs[i_track] - cluster_track_mean) / cluster_track_std;
         tracks_weight[i_track] = exp(-0.5 * xmstd * xmstd) / (cluster_track_std * sqrt(2 * M_PI));
       } else tracks_weight[i_track] = 0;
       cluster_sum_of_weights += tracks_weight[i_track];
       z_vals[i_vertex] += tracks_zs[i_track] * tracks_weight[i_track];
-    }
+  //  }
   }
   z_vals[i_vertex] /= cluster_sum_of_weights;
 

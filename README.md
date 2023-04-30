@@ -15,7 +15,9 @@ per shell session.
 To build on eng-grid, run `source build_env.eng-grid.sh`. This only needs to be
 done once per shell session, before running make.
 
-Next, run `make -j4` to build this project.
+Next, run `make` to build this project.
+
+To change the problem size, re-build as `make -B CXXFLAGS='-DNUM_VERTICES=1024 -DNUM_TRACKS_PER_VERTEX=1024'`
 
 ### Running
 To run on the SCC, request a node with GPUs. E.g., the following request

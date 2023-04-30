@@ -1,4 +1,6 @@
 /test_vertex_fitter
+/test_vertex_fitter_CUDA
+/test_vertex_fitter_CUDAv2
 *.o
 /thirdparty/*/
 *.rpm

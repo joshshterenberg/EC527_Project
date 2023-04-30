@@ -15,19 +15,28 @@ LINK.o=$(LINK.cc)
 CXXBINS=\
      test_vertex_fitter \
      # End of CXXBINS
+CUDABINS=\
+     test_vertex_fitter_CUDA \
+     test_vertex_fitter_CUDAv2 \
+     # End of CUDABINS
 
 .PHONY: all clean check
-all: $(CXXBINS)
+all: $(CXXBINS) $(CUDABINS)
 
 # Default compilation rule for C++ source files
 %.o: %.cc
 	$(CXX) -c $(ALL_CPPFLAGS) $(ALL_CXXFLAGS) $< -o $@
 
+$(CUDABINS): %: %.cu
+	nvcc -arch sm_35 $< -o $@  
+
 $(CXXBINS): % : %.o
 
 # Run any self-tests we have
-check: test_vertex_fitter
+check: $(CXXBINS) $(CUDABINS)
 	./test_vertex_fitter
+	./test_vertex_fitter_CUDA
+	./test_vertex_fitter_CUDAv2
 
 clean:
-	rm -f $(CXXBINS) $(CXXBINS:=.o)
+	rm -f $(CXXBINS) $(CXXBINS:=.o) $(CUDABINS)

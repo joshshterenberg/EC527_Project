@@ -16,6 +16,12 @@
 #ifndef SINGLE_PASS_VARIANCE
 #define SINGLE_PASS_VARIANCE 0
 #endif
+#ifndef NUM_VERTICES
+#define NUM_VERTICES 1024
+#endif
+#ifndef NUM_TRACKS_PER_VERTEX
+#define NUM_TRACKS_PER_VERTEX 2048
+#endif
 
 struct track_soa_t {
   std::unique_ptr<long int[]> ids;
@@ -269,10 +275,6 @@ double interval(struct timespec start, struct timespec end) {
 
 int main(int argc, char *argv[]) {
   //--------------------------------------------preproc
-  static const unsigned NUM_VERTICES = 1024;  // Typically on the order of a few hundred. Other
-                                       // real-world applications are on the order of hundreds of thousands. This is all
-                                       // for one event. Expect many events per second.
-  static const unsigned NUM_TRACKS_PER_VERTEX = 2048;
   static const unsigned NUM_TRACKS = NUM_VERTICES * NUM_TRACKS_PER_VERTEX;
   static const unsigned TRIAL_COUNT = 10; // How many times to recalculate z values for profiling.
 

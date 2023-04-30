@@ -29,16 +29,13 @@ all: $(CXXBINS) $(CUDABINS)
 	$(CXX) -c $(ALL_CPPFLAGS) $(ALL_CXXFLAGS) $< -o $@
 
 $(CUDABINS): %: %.cu
-	nvcc -arch sm_35 $< -o $@  
+	nvcc $(CXXFLAGS) -arch sm_35 $< -o $@  
 
 $(CXXBINS): % : %.o
 
 # Run any self-tests we have
 check: $(CXXBINS) $(CUDABINS)
-	./test_vertex_fitter
-	./test_vertex_fitter_CUDA
-	./test_vertex_fitter_CUDAv2
-	./test_vertex_fitter_CUDAv3
+	./test_vertex_fitter ; ./test_vertex_fitter_CUDA ; ./test_vertex_fitter_CUDAv2 ; ./test_vertex_fitter_CUDAv3
 
 clean:
 	rm -f $(CXXBINS) $(CXXBINS:=.o) $(CUDABINS)

@@ -46,10 +46,11 @@ __device__ double atomicAdd(double* address, double val)
 }
 
 #define PRINT_TIME		1
-#define NUM_VERTICES		500
-#define NUM_TRACKS_PER_VERTEX	2000
+#define NUM_VERTICES		1024
+#define NUM_TRACKS_PER_VERTEX	2048
 #define NUM_TRACKS		(NUM_VERTICES * NUM_TRACKS_PER_VERTEX)
 #define SAMPLE_NUM		12
+#define NUM_TRACKS_PER_THREAD	64
 
 struct track_soa_t {
   long int* ids;
@@ -62,54 +63,57 @@ struct track_soa_t {
 __global__ void proc(double* tracks_zs, double* tracks_weight, long int* tracks_cluster_ids, double* z_vals) {
   // current parallel strat: every track gets its own thread, block/vertex
 
-  const int i_track = threadIdx.x; //track
-  const int i_vertex = blockDim.x; //vertex
-  __shared__ unsigned cluster_track_count;
-  __shared__ double cluster_track_mean;
-  __shared__ double cluster_track_std;
+  //dim3 dimGrid(NUM_VERTICES); // 500
+  //dim3 dimBlock(NUM_TRACKS_PER_VERTEX / NUM_TRACKS_PER_THREAD); // 2000/2 = 1000
+  const int i_track = blockIdx.x * (blockDim.x * NUM_TRACKS_PER_THREAD) + threadIdx.x * NUM_TRACKS_PER_THREAD; //track
+  const int i_vertex = blockIdx.x; //vertex
+  __shared__ double cluster_track_sum;
   __shared__ double cluster_sum_of_weights;
+  __shared__ double cluster_sumsq;
 
-  cluster_track_count = 0;
-  cluster_track_mean = 0;
-  cluster_track_std = 0;
+  cluster_track_sum = 0;
   cluster_sum_of_weights = 0;
-
+  cluster_sumsq = 0;
   __syncthreads(); //always sync write/read clusters
 
-  long int cluster_id = tracks_cluster_ids[i_track];
-  atomicAdd(&cluster_track_mean, tracks_zs[i_track]);
-  atomicAdd(&cluster_track_count, 1);
-  
+  double thread_sum = 0;
+  for (unsigned i = i_track; i < i_track + NUM_TRACKS_PER_THREAD; ++i) {
+	  thread_sum += tracks_zs[i];
+  }
+  atomicAdd(&cluster_track_sum, thread_sum);
   __syncthreads();
 
-  cluster_track_mean /= cluster_track_count;
-
+  double cluster_track_mean = cluster_track_sum / NUM_TRACKS_PER_VERTEX;
+  double thread_sumsq = 0;
+  for (unsigned i = i_track; i < i_track + NUM_TRACKS_PER_THREAD; ++i) {
+	  double diff = tracks_zs[i] - cluster_track_mean;
+	  thread_sumsq += diff * diff;
+  }
+  atomicAdd(&cluster_sumsq, thread_sumsq);
   __syncthreads();
 
-  double diff = -1.0 * abs(tracks_zs[i_track] - cluster_track_mean);
-  atomicAdd(&cluster_track_std, diff*diff);
-
-  __syncthreads();
-
-  cluster_track_std = sqrt(cluster_track_std / (cluster_track_count - 1));
-
-  __syncthreads();
-
-  if (diff <= cluster_track_std * 3) {
-    double xmstd = (tracks_zs[i_track] - cluster_track_mean) / cluster_track_std;
-    tracks_weight[i_track] = exp(-0.5 * xmstd * xmstd) / (cluster_track_std * sqrt(2 * M_PI));
-  } else tracks_weight[i_track] = 0;
-
-  atomicAdd(&cluster_sum_of_weights, tracks_weight[i_track]);
-
+  double cluster_track_std = sqrt(cluster_sumsq / (NUM_TRACKS_PER_VERTEX - 1));
+  thread_sum = 0;
+  for (unsigned i = i_track; i < i_track + NUM_TRACKS_PER_THREAD ; ++i) {
+	  double diff = tracks_zs[i] - cluster_track_mean;
+	  double w;
+	  if (diff <= cluster_track_std * 3) {
+		  double xmstd = diff / cluster_track_std;
+		  w = exp(-0.5 * xmstd * xmstd) / (cluster_track_std * sqrt(2 * M_PI));
+	  } else {
+		  w = 0;
+	  }
+	  tracks_weight[i] = w;
+	  thread_sum += w;
+  }
+  atomicAdd(&cluster_sum_of_weights, thread_sum);
   __syncthreads();
  
-  atomicAdd(&z_vals[i_vertex], tracks_zs[i_track] * tracks_weight[i_track]);
-
-  __syncthreads();
-
-  z_vals[i_vertex] /= cluster_sum_of_weights;
-
+  thread_sum = 0;
+  for (unsigned i = i_track; i < i_track + NUM_TRACKS_PER_THREAD ; ++i) {
+	  thread_sum += tracks_zs[i] * tracks_weight[i];
+  }
+  atomicAdd(&z_vals[i_vertex], thread_sum / cluster_sum_of_weights);
 }
 
 int main(int argc, char *argv[]) {
@@ -165,7 +169,7 @@ int main(int argc, char *argv[]) {
   CUDA_SAFE_CALL(cudaMemcpy(z_vals_gpu, z_vals, vertex_size, cudaMemcpyHostToDevice));
 
   dim3 dimGrid(NUM_VERTICES);
-  dim3 dimBlock(NUM_TRACKS_PER_VERTEX);
+  dim3 dimBlock(NUM_TRACKS_PER_VERTEX / NUM_TRACKS_PER_THREAD);
 
 #if PRINT_TIME
   // Create the cuda events

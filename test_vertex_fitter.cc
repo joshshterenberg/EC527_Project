@@ -269,10 +269,10 @@ double interval(struct timespec start, struct timespec end) {
 
 int main(int argc, char *argv[]) {
   //--------------------------------------------preproc
-  static const unsigned NUM_VERTICES = 20000;  // Typically on the order of a few hundred. Other
+  static const unsigned NUM_VERTICES = 1024;  // Typically on the order of a few hundred. Other
                                        // real-world applications are on the order of hundreds of thousands. This is all
                                        // for one event. Expect many events per second.
-  static const unsigned NUM_TRACKS_PER_VERTEX = 50;
+  static const unsigned NUM_TRACKS_PER_VERTEX = 2048;
   static const unsigned NUM_TRACKS = NUM_VERTICES * NUM_TRACKS_PER_VERTEX;
   static const unsigned TRIAL_COUNT = 10; // How many times to recalculate z values for profiling.
 

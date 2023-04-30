@@ -8,7 +8,7 @@
  * https://github.com/cms-sw/cmssw project, which is released with an Apache-2.0 license.
  ***************************************************************************/
 //
-//nvcc -arch sm_35 test_vertex_fitter_CUDA.cu -o test_vertex_fitter_CUDA
+//nvcc -arch sm_35 test_vertex_fitter_CUDAv2.cu -o test_vertex_fitter_CUDAv2
 //
 
 #include <stdio.h>
@@ -66,54 +66,45 @@ __global__ void proc(double* tracks_zs, double* tracks_weight, long int* tracks_
   // THIS IS A BAD IDEA IN PRACTICE BECAUSE NUM_TRACKS_PER_VERTEX ISN'T CONSTANT
 
   //assuming that first NUM_TRACKS_PER_VERTEX tracks are assoc with vertex 0, etc.
+  int i_track;
+  const int i_vertex = blockIdx.x * blockDim.x + threadIdx.x; //track
+  unsigned cluster_track_count=0;
+  double cluster_track_mean=0, cluster_track_std=0, cluster_sum_of_weights=0;
 
-  const int i_track = blockIdx.x * blockDim.x + threadIdx.x; //track
-  const int i_vertex = i_track / NUM_TRACKS_PER_VERTEX; //vertex
-  __shared__ unsigned cluster_track_count[NUM_VERTICES];
-  __shared__ double cluster_track_mean[NUM_VERTICES];
-  __shared__ double cluster_track_std[NUM_VERTICES];
-  __shared__ double cluster_sum_of_weights[NUM_VERTICES];
+  //sync write/read is NEVER NEEDED
+  for (i_track = 0; i_track < NUM_TRACKS; i_track++) {
+    long int cluster_id = tracks_cluster_ids[i_track];
+    if (cluster_id == i_vertex) { //track belongs to this vertex
+      cluster_track_mean += tracks_zs[i_track];
+      cluster_track_count += 1;
+    }
+  }
 
-  cluster_track_count[i_vertex] = 0;
-  cluster_track_mean[i_vertex] = 0;
-  cluster_track_std[i_vertex] = 0;
-  cluster_sum_of_weights[i_vertex] = 0;
+  cluster_track_mean /= cluster_track_count;
 
-  __syncthreads(); //always sync write/read clusters
-
-  long int cluster_id = tracks_cluster_ids[i_track];
-  atomicAdd(&cluster_track_mean[cluster_id], tracks_zs[i_track]);
-  atomicAdd(&cluster_track_count[cluster_id], 1);
+  for (i_track = 0; i_track < NUM_TRACKS; i_track++) {
+    long int cluster_id = tracks_cluster_ids[i_track];
+    if (cluster_id == i_vertex) { //track belongs to this vertex
+      double diff = -1.0 * abs(tracks_zs[i_track] - cluster_track_mean);
+      cluster_track_std += diff*diff;
+    }
+  }
   
-  __syncthreads();
+  cluster_track_std = sqrt(cluster_track_std / (cluster_track_count - 1));
 
-  cluster_track_mean[i_vertex] /= cluster_track_count[i_vertex];
-
-  __syncthreads();
-
-  double diff = -1.0 * abs(tracks_zs[i_track] - cluster_track_mean[cluster_id]);
-  atomicAdd(&cluster_track_std[cluster_id], diff*diff);
-
-  __syncthreads();
-
-  cluster_track_std[i_vertex] = sqrt(cluster_track_std[i_vertex] / (cluster_track_count[i_vertex] - 1));
-
-  __syncthreads();
-
-  if (diff <= cluster_track_std[cluster_id] * 3) {
-    double xmstd = (tracks_zs[i_track] - cluster_track_mean[cluster_id]) / cluster_track_std[cluster_id];
-    tracks_weight[i_track] = exp(-0.5 * xmstd * xmstd) / (cluster_track_std[cluster_id] * sqrt(2 * M_PI));
-  } else tracks_weight[i_track] = 0;
-
-  atomicAdd(&cluster_sum_of_weights[cluster_id], tracks_weight[i_track]);
-
-  __syncthreads();
- 
-  atomicAdd(&z_vals[cluster_id], tracks_zs[i_track] * tracks_weight[i_track]);
-
-  __syncthreads();
-
-  z_vals[i_vertex] /= cluster_sum_of_weights[cluster_id];
+  for (i_track = 0; i_track < NUM_TRACKS; i_track++) {
+    long int cluster_id = tracks_cluster_ids[i_track];
+    if (cluster_id == i_vertex) { //track belongs to this vertex
+       double diff = -1.0 * abs(tracks_zs[i_track] - cluster_track_mean);
+      if (diff <= cluster_track_std * 3) {
+        double xmstd = (tracks_zs[i_track] - cluster_track_mean) / cluster_track_std;
+        tracks_weight[i_track] = exp(-0.5 * xmstd * xmstd) / (cluster_track_std * sqrt(2 * M_PI));
+      } else tracks_weight[i_track] = 0;
+      cluster_sum_of_weights += tracks_weight[i_track];
+      z_vals[i_vertex] += tracks_zs[i_track] * tracks_weight[i_track];
+    }
+  }
+  z_vals[i_vertex] /= cluster_sum_of_weights;
 
 }
 
@@ -170,7 +161,7 @@ int main(int argc, char *argv[]) {
   CUDA_SAFE_CALL(cudaMemcpy(z_vals_gpu, z_vals, vertex_size, cudaMemcpyHostToDevice));
 
   dim3 dimGrid(1);
-  dim3 dimBlock(NUM_TRACKS);
+  dim3 dimBlock(NUM_VERTICES);
 
 #if PRINT_TIME
   // Create the cuda events
